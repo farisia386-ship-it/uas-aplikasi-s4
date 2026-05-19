@@ -3,6 +3,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:alarm/alarm.dart';
 import 'dart:convert';
 
 // Inisialisasi plugin notifikasi
@@ -12,11 +13,14 @@ final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Inisialisasi timezone (WIB/Asia/Jakarta)
+  // Inisialisasi timezone
   tz.initializeTimeZones();
   tz.setLocalLocation(tz.getLocation('Asia/Jakarta'));
   
-  // Konfigurasi notifikasi untuk Android
+  // Inisialisasi ALARM SERVICE
+  await Alarm.init();
+  
+  // Konfigurasi notifikasi
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
   
@@ -30,9 +34,13 @@ void main() async {
   
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
   
-  // Request izin notifikasi (Android 13+)
   await flutterLocalNotificationsPlugin.resolvePlatformSpecificImplementation<
       AndroidFlutterLocalNotificationsPlugin>()?.requestNotificationsPermission();
+  
+  // Listen alarm ring stream
+  Alarm.ringStream.stream.listen((_) {
+    // Alarm akan berbunyi otomatis sesuai settings
+  });
   
   runApp(const MyApp());
 }
@@ -67,6 +75,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController descController = TextEditingController();
   String selectedCategory = 'Kuliah';
   DateTime selectedDeadline = DateTime.now();
+  bool enableAlarmSound = true;  // Untuk mengaktifkan/mematikan alarm suara
   final List<String> categories = ['Kuliah', 'Pribadi', 'Kerja', 'Lainnya'];
 
   @override
@@ -75,7 +84,6 @@ class _HomeScreenState extends State<HomeScreen> {
     loadTasks();
   }
 
-  // ============ PENYIMPANAN DATA ============
   Future<void> loadTasks() async {
     final prefs = await SharedPreferences.getInstance();
     final String? tasksString = prefs.getString('tasks');
@@ -92,41 +100,71 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setString('tasks', jsonEncode(tasks));
   }
 
+  // ============ ALARM DENGAN SUARA ============
+  Future<void> scheduleAlarm(Map<String, dynamic> task) async {
+    if (!enableAlarmSound) return;
+    
+    final DateTime deadline = DateTime.parse(task['deadline']);
+    final DateTime now = DateTime.now();
+    
+    if (deadline.isBefore(now)) return;
+    
+    // Set alarm 5 menit sebelum deadline (agar lebih nyata)
+    final DateTime alarmTime = deadline.subtract(const Duration(minutes: 5));
+    
+    // Cek apakah alarm time masih di masa depan
+    if (alarmTime.isBefore(now)) return;
+    
+    // Cek apakah file audio ada
+    final alarmSettings = AlarmSettings(
+      id: task['id'],
+      dateTime: alarmTime,
+      assetAudioPath: 'assets/audio/alarm_sound.mp3',
+      loopAudio: true,
+      vibrate: true,
+      volume: 1.0,
+      fadeDuration: 3.0,
+      notificationTitle: '⏰ TASKMATE ALARM',
+      notificationBody: 'Waktunya mengerjakan: ${task['title']}',
+      enableNotificationOnKill: true,
+      androidFullScreenIntent: true,
+    );
+    
+    await Alarm.set(alarmSettings: alarmSettings);
+    print('🔔 ALARM dijadwalkan untuk: ${task['title']} pada ${alarmTime.hour}:${alarmTime.minute}');
+  }
+
+  // Hapus alarm
+  Future<void> cancelAlarm(int taskId) async {
+    await Alarm.stop(taskId);
+    print('🔕 Alarm dibatalkan untuk ID: $taskId');
+  }
+
   // ============ NOTIFIKASI H-5 ============
   Future<void> scheduleDailyReminder(Map<String, dynamic> task) async {
     final DateTime deadline = DateTime.parse(task['deadline']);
     final DateTime now = DateTime.now();
     
-    // Hitung H-5 (5 hari sebelum deadline)
     final DateTime startDate = deadline.subtract(const Duration(days: 5));
-    
-    // Jika deadline kurang dari 5 hari, mulai dari sekarang
     final DateTime actualStart = startDate.isBefore(now) ? now : startDate;
     
-    // Batasi maksimal notifikasi sampai deadline
     if (actualStart.isAfter(deadline)) return;
     
-    // Hitung berapa hari notifikasi akan berjalan
     int daysUntilDeadline = deadline.difference(actualStart).inDays + 1;
     if (daysUntilDeadline > 5) daysUntilDeadline = 5;
     
-    // Jadwalkan notifikasi setiap hari pada jam 08:00
     for (int i = 0; i < daysUntilDeadline; i++) {
       final DateTime notificationDate = actualStart.add(Duration(days: i));
       
-      // Jangan jadwalkan jika sudah lewat
-      if (notificationDate.isBefore(now) && 
-          notificationDate.day == now.day) continue;
+      if (notificationDate.isBefore(now) && notificationDate.day == now.day) continue;
       
-      // Set waktu notifikasi jam 08:00 pagi
       final DateTime scheduledTime = DateTime(
         notificationDate.year,
         notificationDate.month,
         notificationDate.day,
-        8, 0, // Jam 08:00
+        8, 0,
       );
       
-      // Hitung hari ke berapa (H-?)
       final int daysLeft = deadline.difference(notificationDate).inDays;
       String message;
       
@@ -135,19 +173,16 @@ class _HomeScreenState extends State<HomeScreen> {
       } else if (daysLeft == 1) {
         message = '❗ Besok deadline! Tugas "${task['title']}" harus segera diselesaikan.';
       } else {
-        message = '📢 Tugas "${task['title']}" akan berakhir dalam $daysLeft hari. Jangan lupa dikerjakan!';
+        message = '📢 Tugas "${task['title']}" akan berakhir dalam $daysLeft hari.';
       }
       
-      // Kirim notifikasi
       await scheduleNotification(
         id: task['id'] + i,
-        title: '⏰ Pengingat Tugas: ${task['title']}',
+        title: '⏰ Pengingat: ${task['title']}',
         body: message,
         scheduledDate: scheduledTime,
       );
     }
-    
-    print('DEBUG: Notifikasi H-5 dijadwalkan untuk tugas: ${task['title']}');
   }
 
   Future<void> scheduleNotification({
@@ -201,8 +236,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   // ============ CRUD TUGAS ============
-  
-  // TAMBAH TUGAS
   void addTask() async {
     if (titleController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -225,8 +258,11 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     saveTasks();
     
-    // Jadwalkan notifikasi H-5 untuk tugas baru
+    // Jadwalkan notifikasi H-5
     await scheduleDailyReminder(newTask);
+    
+    // Jadwalkan ALARM SUARA (5 menit sebelum deadline)
+    await scheduleAlarm(newTask);
     
     titleController.clear();
     descController.clear();
@@ -234,14 +270,16 @@ class _HomeScreenState extends State<HomeScreen> {
     
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('✅ Tugas ditambahkan + Notifikasi H-5 aktif!'),
+        content: Text('✅ Tugas + Notifikasi H-5 + Alarm Suara Aktif!'),
         backgroundColor: Colors.teal,
       ),
     );
   }
 
-  // HAPUS TUGAS
   void deleteTask(int id) async {
+    // Hapus alarm
+    await cancelAlarm(id);
+    // Hapus notifikasi
     await cancelTaskNotifications(id);
     
     setState(() {
@@ -251,29 +289,33 @@ class _HomeScreenState extends State<HomeScreen> {
     
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('🗑️ Tugas dan notifikasi dihapus'),
+        content: Text('🗑️ Tugas, notifikasi, dan alarm dihapus'),
         backgroundColor: Colors.green,
       ),
     );
   }
 
-  // TANDAI SELESAI
   void toggleComplete(int id) {
     setState(() {
       final index = tasks.indexWhere((task) => task['id'] == id);
       if (index != -1) {
         tasks[index]['isCompleted'] = !tasks[index]['isCompleted'];
+        
+        // Jika tugas selesai, hentikan alarm
+        if (tasks[index]['isCompleted'] == true) {
+          Alarm.stop(id);
+        }
       }
     });
     saveTasks();
   }
 
-  // EDIT TUGAS
   void editTask(Map<String, dynamic> task) async {
     titleController.text = task['title'];
     descController.text = task['description'] ?? '';
     selectedCategory = task['category'];
     selectedDeadline = DateTime.parse(task['deadline']);
+    enableAlarmSound = true;
 
     showDialog(
       context: context,
@@ -354,6 +396,22 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Text('Aktifkan Alarm Suara'),
+                    const Spacer(),
+                    Switch(
+                      value: enableAlarmSound,
+                      onChanged: (value) {
+                        setState(() {
+                          enableAlarmSound = value;
+                        });
+                      },
+                      activeColor: Colors.teal,
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -364,20 +422,26 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             ElevatedButton(
               onPressed: () async {
+                await cancelAlarm(task['id']);
                 await cancelTaskNotifications(task['id']);
                 
                 task['title'] = titleController.text;
                 task['description'] = descController.text;
                 task['category'] = selectedCategory;
                 task['deadline'] = selectedDeadline.toIso8601String();
+                task['isCompleted'] = false;
                 
                 setState(() {});
                 saveTasks();
                 await scheduleDailyReminder(task);
                 
+                if (enableAlarmSound) {
+                  await scheduleAlarm(task);
+                }
+                
                 Navigator.pop(context);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Tugas diupdate! Notifikasi disesuaikan')),
+                  const SnackBar(content: Text('Tugas diupdate! Alarm disesuaikan')),
                 );
               },
               style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
@@ -389,12 +453,12 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // DIALOG TAMBAH TUGAS
   void showAddDialog() {
     titleController.clear();
     descController.clear();
     selectedCategory = 'Kuliah';
-    selectedDeadline = DateTime.now().add(const Duration(days: 7));
+    selectedDeadline = DateTime.now().add(const Duration(minutes: 2));
+    enableAlarmSound = true;
 
     showDialog(
       context: context,
@@ -475,6 +539,22 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Text('Aktifkan Alarm Suara'),
+                    const Spacer(),
+                    Switch(
+                      value: enableAlarmSound,
+                      onChanged: (value) {
+                        setState(() {
+                          enableAlarmSound = value;
+                        });
+                      },
+                      activeColor: Colors.teal,
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.all(8),
@@ -484,11 +564,11 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   child: const Row(
                     children: [
-                      Icon(Icons.notifications_active, color: Colors.orange),
+                      Icon(Icons.alarm, color: Colors.orange),
                       SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          '🔔 Notifikasi akan dikirim setiap hari jam 08:00 pagi mulai H-5 hingga deadline!',
+                          '🔔 Alarm akan berbunyi 5 menit SEBELUM deadline dengan suara kencang!',
                           style: TextStyle(fontSize: 12),
                         ),
                       ),
@@ -506,7 +586,7 @@ class _HomeScreenState extends State<HomeScreen> {
             ElevatedButton(
               onPressed: addTask,
               style: ElevatedButton.styleFrom(backgroundColor: Colors.teal),
-              child: const Text('Simpan & Aktifkan Notifikasi'),
+              child: const Text('Simpan & Aktifkan Alarm'),
             ),
           ],
         );
@@ -514,12 +594,11 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // ============ UI ============
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('TaskMate - With Reminder H-5'),
+        title: const Text('TaskMate - With Alarm & Notifikasi'),
         backgroundColor: Colors.teal,
         foregroundColor: Colors.white,
         centerTitle: true,
@@ -529,11 +608,11 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.notifications_active, size: 80, color: Colors.grey[400]),
+                  Icon(Icons.alarm, size: 80, color: Colors.grey[400]),
                   const SizedBox(height: 16),
                   Text('Belum ada tugas', style: TextStyle(color: Colors.grey[600])),
                   const SizedBox(height: 8),
-                  Text('Tambah tugas untuk mengaktifkan reminder H-5',
+                  Text('Tambah tugas untuk mengaktifkan alarm & reminder',
                       style: TextStyle(color: Colors.grey[500])),
                 ],
               ),
@@ -567,15 +646,23 @@ class _HomeScreenState extends State<HomeScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  task['title'],
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.bold,
-                                    decoration: task['isCompleted'] == true
-                                        ? TextDecoration.lineThrough
-                                        : null,
-                                  ),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        task['title'],
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          decoration: task['isCompleted'] == true
+                                              ? TextDecoration.lineThrough
+                                              : null,
+                                        ),
+                                      ),
+                                    ),
+                                    if (!task['isCompleted'] && deadlineDate.isAfter(DateTime.now()))
+                                      Icon(Icons.alarm, color: Colors.teal, size: 16),
+                                  ],
                                 ),
                                 if (task['description'].toString().isNotEmpty)
                                   Text(task['description'],
@@ -597,7 +684,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     Icon(Icons.access_time, size: 14, color: Colors.grey[600]),
                                     const SizedBox(width: 4),
                                     Text(
-                                      '${deadlineDate.day}/${deadlineDate.month}/${deadlineDate.year}',
+                                      '${deadlineDate.day}/${deadlineDate.month}/${deadlineDate.year} ${deadlineDate.hour}:${deadlineDate.minute}',
                                       style: const TextStyle(fontSize: 12),
                                     ),
                                     const SizedBox(width: 8),

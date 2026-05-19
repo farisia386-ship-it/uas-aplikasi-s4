@@ -1,17 +1,18 @@
-# deadlinekeeper
+# TaskMate - Aplikasi To-Do List dengan Deadline
 
-A new Flutter project.
+## Deskripsi
+Aplikasi manajemen tugas sederhana dengan fitur deadline, kategori, dan penyimpanan lokal.
 
-## Getting Started
+## Fitur
+- ✅ Menambah tugas baru
+- ✅ Menghapus tugas
+- ✅ Mengedit tugas (klik pada card tugas)
+- ✅ Menandai tugas selesai
+- ✅ Memilih kategori (Kuliah, Pribadi, Kerja, Lainnya)
+- ✅ Memilih deadline (tanggal dan jam)
+- ✅ Penyimpanan data lokal (SharedPreferences)
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Cara Menjalankan
+```bash
+flutter pub get
+flutter run -d chrome
