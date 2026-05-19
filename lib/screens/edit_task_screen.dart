@@ -68,10 +68,9 @@ class _EditTaskScreenState extends State<EditTaskScreen> {
       );
       
       await DatabaseHelper().updateTask(updatedTask);
-      
-      if (mounted) {
-        Navigator.pop(context);
-      }
+
+      if (!mounted) return;
+      Navigator.pop(context);
     }
   }
 

@@ -17,8 +17,16 @@ class TaskCard extends StatelessWidget {
   });
 
   Future<void> _toggleComplete() async {
-    task.isCompleted = !task.isCompleted;
-    await DatabaseHelper().updateTask(task);
+    await DatabaseHelper().updateTask(
+      Task(
+        id: task.id,
+        title: task.title,
+        description: task.description,
+        category: task.category,
+        deadline: task.deadline,
+        isCompleted: !task.isCompleted,
+      ),
+    );
     onRefresh();
   }
 
@@ -126,14 +134,15 @@ Widget build(BuildContext context) {
               ),
             ),
             IconButton(
-              icon: const Icon(Icons.delete_outline, color: Colors.red),
-              onPressed: onDelete,
-            ),
+  icon: const Icon(Icons.delete_outline, color: Colors.red),
+  onPressed: () {
+    onDelete();
+  },
+),
           ],
         ),
       ),
     ),
   );
 }
-
 }
